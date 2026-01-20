@@ -3,7 +3,6 @@
 (function() {
   'use strict';
 
-  // --- State ---
   const state = {
     audioBuffer: null,
     audioContext: null,
@@ -14,21 +13,23 @@
     
     // Playback Control State
     isPlaying: false,
-    startTime: 0,      // When the current play started (context time)
-    pausedAt: 0,       // How many seconds into the buffer we are
+    startTime: 0,
+    pausedAt: 0,
     isVirtualActive: false,
     
     volume: 1.0,
-    loop: false
+    loop: false,
+    
+    // Folder/Library State
+    folderHandles: [], // Stores lightweight FileSystemHandle objects
+    currentHandle: null
   };
 
-  // --- Logger ---
   function log(msg, type = 'info') {
     const event = new CustomEvent('vm-log', { detail: { msg, type } });
     window.dispatchEvent(event);
   }
 
-  // --- Audio Engine ---
   function initContext() {
     if (!state.audioContext) {
       state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -43,8 +44,6 @@
     state.destinationNode = state.audioContext.createMediaStreamDestination();
     state.gainNode = state.audioContext.createGain();
     state.gainNode.gain.value = state.volume;
-    
-    // Connect Gain -> Destination
     state.gainNode.connect(state.destinationNode);
     state.stream = state.destinationNode.stream;
     return state.stream;
@@ -52,58 +51,110 @@
 
   function stopSource() {
     if (state.sourceNode) {
-      try {
-        state.sourceNode.stop();
-        state.sourceNode.disconnect();
-      } catch (e) {} // Ignore if already stopped
+      try { state.sourceNode.stop(); state.sourceNode.disconnect(); } catch (e) {}
       state.sourceNode = null;
     }
     state.isPlaying = false;
   }
 
-  // --- Playback Controls (Exposed to UI) ---
+  // --- Public API ---
 
   window.VirtualMicAPI = {
-    loadAudio: async (base64Data) => {
+    
+    // 1. FOLDER MANAGEMENT
+    openFolder: async () => {
       try {
-        initContext();
-        const binaryString = window.atob(base64Data);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
+        // Request folder access
+        const dirHandle = await window.showDirectoryPicker();
+        state.folderHandles = [];
+        let count = 0;
         
-        state.audioBuffer = await state.audioContext.decodeAudioData(bytes.buffer);
-        log("Audio loaded successfully.", "success");
+        // Iterate through folder to get names (Fast)
+        for await (const entry of dirHandle.values()) {
+          if (entry.kind === 'file') {
+            const name = entry.name.toLowerCase();
+            // Filter for audio types
+            if (name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.ogg') || name.endsWith('.m4a')) {
+              state.folderHandles.push(entry);
+              count++;
+            }
+          }
+        }
         
-        // Notify UI duration
-        const durationEvent = new CustomEvent('vm-duration', { detail: state.audioBuffer.duration });
-        window.dispatchEvent(durationEvent);
+        log(`Folder loaded: ${count} recordings found.`, 'success');
+        
+        // Send list to UI
+        const listEvent = new CustomEvent('vm-folder-loaded', { detail: {
+          count: count,
+          handles: state.folderHandles.map(h => h.name) // Send only names for display
+        }});
+        window.dispatchEvent(listEvent);
         
         return true;
-      } catch (e) {
-        log("Error decoding audio: " + e.message, "error");
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          log("Error opening folder: " + err.message, 'error');
+        }
         return false;
       }
     },
 
+    // 2. AUDIO LOADING (Lazy Load)
+    loadByHandle: async (fileName) => {
+      try {
+        initContext();
+        // Find the handle by name (fast lookup)
+        const handle = state.folderHandles.find(h => h.name === fileName);
+        if (!handle) {
+          log("File handle not found.", 'error');
+          return false;
+        }
+
+        // UI Feedback: Loading
+        const loadingEvent = new CustomEvent('vm-loading');
+        window.dispatchEvent(loadingEvent);
+
+        // Load file data from disk (Slow, only happens now)
+        const file = await handle.getFile();
+        const arrayBuffer = await file.arrayBuffer();
+        
+        // Decode
+        const decodedBuffer = await state.audioContext.decodeAudioData(arrayBuffer);
+        state.audioBuffer = decodedBuffer;
+        state.currentHandle = fileName;
+        state.pausedAt = 0;
+        
+        log(`Loaded: ${fileName}`, 'success');
+        
+        // Notify UI duration and success
+        const durationEvent = new CustomEvent('vm-duration', { detail: state.audioBuffer.duration });
+        window.dispatchEvent(durationEvent);
+        
+        const doneEvent = new CustomEvent('vm-loading-done', { detail: fileName });
+        window.dispatchEvent(doneEvent);
+
+        return true;
+      } catch (e) {
+        log("Error loading audio: " + e.message, 'error');
+        const failEvent = new CustomEvent('vm-loading-fail');
+        window.dispatchEvent(failEvent);
+        return false;
+      }
+    },
+
+    // 3. PLAYBACK CONTROLS
     play: () => {
       if (!state.audioBuffer) return;
-      stopSource(); // Ensure no overlap
+      stopSource();
       
       state.sourceNode = state.audioContext.createBufferSource();
       state.sourceNode.buffer = state.audioBuffer;
       state.sourceNode.loop = state.loop;
-      
       state.sourceNode.connect(state.gainNode);
-      // Also connect to destination (speakers) if you want to hear it, 
-      // but for a virtual mic, usually we only want it going to the stream.
-      // Uncomment below to hear it yourself (Monitoring):
-      // state.gainNode.connect(state.audioContext.destination); 
-
       state.sourceNode.start(0, state.pausedAt);
+      
       state.startTime = state.audioContext.currentTime - state.pausedAt;
       state.isPlaying = true;
-      
       log("Playback started.", "info");
     },
 
@@ -125,14 +176,8 @@
     seek: (percent) => {
       const wasPlaying = state.isPlaying;
       if (wasPlaying) stopSource();
-      
       state.pausedAt = percent * state.audioBuffer.duration;
-      
-      if (wasPlaying) {
-         // Restart immediately at new position
-         window.VirtualMicAPI.play();
-      }
-      log(`Seeked to ${Math.round(percent * 100)}%.`, "info");
+      if (wasPlaying) window.VirtualMicAPI.play();
     },
 
     setVolume: (val) => {
@@ -148,8 +193,7 @@
     activateInjection: () => {
       state.isVirtualActive = true;
       createStream();
-      log("INJECTION ACTIVE: Physical Mic Blocked.", "success");
-      
+      log("INJECTION ACTIVE.", "success");
       const statusEvent = new CustomEvent('vm-status', { detail: true });
       window.dispatchEvent(statusEvent);
     },
@@ -157,8 +201,7 @@
     deactivateInjection: () => {
       state.isVirtualActive = false;
       stopSource();
-      log("INJECTION STOPPED: Physical Mic Available.", "info");
-      
+      log("INJECTION STOPPED.", "info");
       const statusEvent = new CustomEvent('vm-status', { detail: false });
       window.dispatchEvent(statusEvent);
     },
@@ -175,14 +218,8 @@
   
   navigator.mediaDevices.getUserMedia = function(constraints) {
     if (state.isVirtualActive && constraints.audio) {
-      log("Intercepted getUserMedia request.", "info");
-      
-      // If audio is paused/stopped, we play it so the site gets audio
-      if (!state.isPlaying && state.audioBuffer) {
-        window.VirtualMicAPI.play();
-      }
-
-      // Return the virtual stream
+      log("Intercepted getUserMedia.", "info");
+      if (!state.isPlaying && state.audioBuffer) window.VirtualMicAPI.play();
       return Promise.resolve(state.stream || createStream());
     }
     return originalGetUserMedia(constraints);
