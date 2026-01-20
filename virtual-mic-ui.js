@@ -119,7 +119,7 @@
 
     /* File List */
     .file-list {
-      max-height: 150px;
+      max-height: 100px;
       overflow-y: auto;
       border-top: 1px solid #444;
       background: #1a1a1f;
