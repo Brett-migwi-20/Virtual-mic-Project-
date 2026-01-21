@@ -175,7 +175,7 @@
     </div>
     <div class="body">
       
-      <!-- 1. DEVICE STATUS (New Section) -->
+      <!-- 1. DEVICE STATUS -->
       <div class="device-status-row">
         <div class="device-item">
           <span class="label">Physical Mic</span>
@@ -215,9 +215,6 @@
       </div>
 
       <div class="settings-row">
-        <span>Loop</span><input type="checkbox" id="loopCheck" checked>
-      </div>
-      <div class="settings-row">
         <span>Vol</span><input type="range" id="volRange" min="0" max="2" step="0.1" value="1">
       </div>
 
@@ -247,7 +244,6 @@
     btnInject: shadow.querySelector('#btnInject'),
     progressBar: shadow.querySelector('#progressBar'),
     progressContainer: shadow.querySelector('#progressContainer'),
-    loopCheck: shadow.querySelector('#loopCheck'),
     volRange: shadow.querySelector('#volRange'),
     logArea: shadow.querySelector('#logArea'),
     host: container
@@ -272,22 +268,15 @@
     els.logArea.scrollTop = els.logArea.scrollHeight;
   }
 
-  // Updates the Status Badges based on injection state
   function updateDeviceStatus(isVirtualActive) {
     if (isVirtualActive) {
-      // Virtual Mic Active
       els.virtStatus.textContent = "Active";
       els.virtStatus.className = "badge status-on";
-      
-      // Physical Mic Blocked
       els.physStatus.textContent = "BLOCKED";
       els.physStatus.className = "badge status-blocked";
     } else {
-      // Virtual Mic Inactive
       els.virtStatus.textContent = "Inactive";
       els.virtStatus.className = "badge status-off";
-      
-      // Physical Mic Available
       els.physStatus.textContent = "Available";
       els.physStatus.className = "badge status-available";
     }
@@ -314,18 +303,15 @@
   }
 
   function selectFile(name) {
-    if (name === loadedFileName) return; // Already selected
-    
+    if (name === loadedFileName) return; 
     els.trackName.textContent = "Loading...";
     
-    // Visual feedback in list
     const items = els.fileList.querySelectorAll('.file-item');
     items.forEach(i => {
       if (i.textContent === name) i.classList.add('loading');
       else i.classList.remove('active');
     });
 
-    // Trigger API load
     window.VirtualMicAPI.loadByHandle(name);
   }
 
@@ -344,21 +330,13 @@
   els.btnPlayPause.addEventListener('click', () => {
     if (isPlaying) {
       window.VirtualMicAPI.pause();
-      els.btnPlayPause.textContent = "Play";
-      isPlaying = false;
     } else {
       window.VirtualMicAPI.play();
-      els.btnPlayPause.textContent = "Pause";
-      isPlaying = true;
-      startProgressLoop();
     }
   });
 
   els.btnStop.addEventListener('click', () => {
     window.VirtualMicAPI.stop();
-    els.btnPlayPause.textContent = "Play";
-    isPlaying = false;
-    els.progressBar.style.width = '0%';
   });
 
   els.btnInject.addEventListener('click', () => {
@@ -387,9 +365,7 @@
     window.VirtualMicAPI.seek(percent);
   });
 
-  els.loopCheck.addEventListener('change', (e) => window.VirtualMicAPI.setLoop(e.target.checked));
   els.volRange.addEventListener('input', (e) => window.VirtualMicAPI.setVolume(parseFloat(e.target.value)));
-
   els.closeBtn.addEventListener('click', () => els.host.style.display = 'none');
 
   // --- Custom Event Responses ---
@@ -397,13 +373,9 @@
   window.addEventListener('vm-log', (e) => addLog(e.detail.msg, e.detail.type));
   
   window.addEventListener('vm-folder-loaded', (e) => {
-    allFiles = e.detail.handles; // Store the array of strings (names)
+    allFiles = e.detail.handles;
     els.countBadge.textContent = e.detail.count;
     renderFileList(allFiles);
-  });
-
-  window.addEventListener('vm-loading', () => {
-    // UI updated inside selectFile immediately
   });
 
   window.addEventListener('vm-loading-done', (e) => {
@@ -411,28 +383,36 @@
     els.trackName.textContent = loadedFileName;
     els.btnPlayPause.disabled = false;
     els.btnStop.disabled = false;
-    
-    // Re-render list to update active state
     const currentSearch = els.searchInput.value.toLowerCase();
     const filtered = allFiles.filter(f => f.toLowerCase().includes(currentSearch));
     renderFileList(filtered);
   });
   
-  window.addEventListener('vm-loading-fail', () => {
-    els.trackName.textContent = "Error loading file";
-  });
-
   window.addEventListener('vm-duration', (e) => {
     audioDuration = e.detail;
-    addLog(`Duration: ${audioDuration.toFixed(2)}s`);
   });
 
-  // Listen for status updates from logic script (e.g. if it starts automatically)
+  // Listen for playback state changes from Logic to sync UI
+  window.addEventListener('vm-playback-started', () => {
+    isPlaying = true;
+    els.btnPlayPause.textContent = "Pause";
+    startProgressLoop();
+  });
+
+  window.addEventListener('vm-playback-paused', () => {
+    isPlaying = false;
+    els.btnPlayPause.textContent = "Play";
+  });
+
+  window.addEventListener('vm-playback-stopped', () => {
+    isPlaying = false;
+    els.btnPlayPause.textContent = "Play";
+    els.progressBar.style.width = '0%';
+  });
+
   window.addEventListener('vm-status', (e) => {
     const isActive = e.detail;
     updateDeviceStatus(isActive);
-    
-    // Sync button text if changed externally (rare but possible)
     if (isActive && !isInjected) {
         els.btnInject.textContent = "Stop Injection";
         els.btnInject.classList.remove('btn-danger');
@@ -444,7 +424,6 @@
         els.btnInject.classList.remove('btn-primary');
         isInjected = false;
     }
-    
     addLog(isActive ? "Injection Started" : "Injection Stopped", "success");
   });
 
@@ -457,10 +436,23 @@
     progressInterval = setInterval(() => {
       const p = window.VirtualMicAPI.getProgress();
       els.progressBar.style.width = `${p * 100}%`;
-      if (p >= 0.99 && !els.loopCheck.checked) {
+      
+      // Loop is removed, so we check for track end (>= 99%)
+      if (p >= 0.99) {
         isPlaying = false;
         els.btnPlayPause.textContent = "Play";
         clearInterval(progressInterval);
+
+        // --- AUTOMATION: CLICK STOP RECORDING BUTTON ---
+        setTimeout(() => {
+            const stopBtn = document.querySelector('button.btn.btn-error.rounded-full');
+            if (stopBtn) {
+                addLog("Playback finished. Clicking external Stop Recording button...", "success");
+                stopBtn.click();
+            } else {
+                addLog("Playback finished. Stop button not found.", "error");
+            }
+        }, 100);
       }
     }, 100);
   }

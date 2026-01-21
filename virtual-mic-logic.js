@@ -18,10 +18,10 @@
     isVirtualActive: false,
     
     volume: 1.0,
-    loop: false,
+    // Loop removed
     
     // Folder/Library State
-    folderHandles: [], // Stores lightweight FileSystemHandle objects
+    folderHandles: [],
     currentHandle: null
   };
 
@@ -61,19 +61,15 @@
 
   window.VirtualMicAPI = {
     
-    // 1. FOLDER MANAGEMENT
     openFolder: async () => {
       try {
-        // Request folder access
         const dirHandle = await window.showDirectoryPicker();
         state.folderHandles = [];
         let count = 0;
         
-        // Iterate through folder to get names (Fast)
         for await (const entry of dirHandle.values()) {
           if (entry.kind === 'file') {
             const name = entry.name.toLowerCase();
-            // Filter for audio types
             if (name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.ogg') || name.endsWith('.m4a')) {
               state.folderHandles.push(entry);
               count++;
@@ -83,10 +79,9 @@
         
         log(`Folder loaded: ${count} recordings found.`, 'success');
         
-        // Send list to UI
         const listEvent = new CustomEvent('vm-folder-loaded', { detail: {
           count: count,
-          handles: state.folderHandles.map(h => h.name) // Send only names for display
+          handles: state.folderHandles.map(h => h.name)
         }});
         window.dispatchEvent(listEvent);
         
@@ -99,26 +94,21 @@
       }
     },
 
-    // 2. AUDIO LOADING (Lazy Load)
     loadByHandle: async (fileName) => {
       try {
         initContext();
-        // Find the handle by name (fast lookup)
         const handle = state.folderHandles.find(h => h.name === fileName);
         if (!handle) {
           log("File handle not found.", 'error');
           return false;
         }
 
-        // UI Feedback: Loading
         const loadingEvent = new CustomEvent('vm-loading');
         window.dispatchEvent(loadingEvent);
 
-        // Load file data from disk (Slow, only happens now)
         const file = await handle.getFile();
         const arrayBuffer = await file.arrayBuffer();
         
-        // Decode
         const decodedBuffer = await state.audioContext.decodeAudioData(arrayBuffer);
         state.audioBuffer = decodedBuffer;
         state.currentHandle = fileName;
@@ -126,7 +116,6 @@
         
         log(`Loaded: ${fileName}`, 'success');
         
-        // Notify UI duration and success
         const durationEvent = new CustomEvent('vm-duration', { detail: state.audioBuffer.duration });
         window.dispatchEvent(durationEvent);
         
@@ -142,19 +131,21 @@
       }
     },
 
-    // 3. PLAYBACK CONTROLS
     play: () => {
       if (!state.audioBuffer) return;
       stopSource();
       
       state.sourceNode = state.audioContext.createBufferSource();
       state.sourceNode.buffer = state.audioBuffer;
-      state.sourceNode.loop = state.loop;
+      // Loop functionality removed
       state.sourceNode.connect(state.gainNode);
       state.sourceNode.start(0, state.pausedAt);
       
       state.startTime = state.audioContext.currentTime - state.pausedAt;
       state.isPlaying = true;
+      
+      // Notify UI so progress bar starts
+      window.dispatchEvent(new CustomEvent('vm-playback-started'));
       log("Playback started.", "info");
     },
 
@@ -163,6 +154,9 @@
         state.sourceNode.stop();
         state.pausedAt = state.audioContext.currentTime - state.startTime;
         state.isPlaying = false;
+        
+        // Notify UI
+        window.dispatchEvent(new CustomEvent('vm-playback-paused'));
         log("Playback paused.", "warning");
       }
     },
@@ -170,6 +164,9 @@
     stop: () => {
       stopSource();
       state.pausedAt = 0;
+      
+      // Notify UI
+      window.dispatchEvent(new CustomEvent('vm-playback-stopped'));
       log("Playback stopped.", "warning");
     },
 
@@ -185,10 +182,7 @@
       if (state.gainNode) state.gainNode.gain.value = val;
     },
 
-    setLoop: (isLoop) => {
-      state.loop = isLoop;
-      if (state.sourceNode) state.sourceNode.loop = isLoop;
-    },
+    // setLoop removed
 
     activateInjection: () => {
       state.isVirtualActive = true;
