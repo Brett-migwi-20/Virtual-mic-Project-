@@ -57,13 +57,10 @@ A Chrome extension that enables persistent audio injection into web applications
 ## Files Overview
 
 - `manifest.json`: Extension configuration and permissions.
-- `background.js`: Handles extension icon clicks to toggle UI.
+- `background.js`: Handles extension icon clicks to toggle the in-page UI.
 - `content.js`: Injects logic and UI scripts into web pages.
-- `popup.html/js/css`: Extension popup interface.
 - `virtual-mic-logic.js`: Core audio engine and API for playback/injection.
 - `virtual-mic-ui.js`: In-page UI component with controls and logs.
-- `virtual-mic.js`: Alternative virtual mic implementation (legacy or variant).
-- `page_inject.js`: Page-context script for advanced injection scenarios.
 - `icons/`: Extension icons in various sizes.
 
 ## Requirements
